@@ -15,7 +15,7 @@
 
 ---
 
-![Asteroids Deluxe Gameplay](preview.png)
+![Asteroids Deluxe Gameplay](img/fullScreen.png)
 
 </div>
 
@@ -72,13 +72,20 @@
 ### 🎛️ Customization
 
 - **7 Color Themes**: 
+  - **Classic Arcade** (Default) - Timeless white-on-black vector graphics
   - Matrix (Green on Black)
   - Amber Terminal (Classic CRT)
   - Green Phosphor
   - Blue Terminal
   - Red Alert
-  - Classic Arcade
   - Cyan Term
+  
+  <div align="center">
+  <img src="img/preview.png" alt="Color Scheme Preview" width="600">
+  <br>
+  <em>Press 'C' during gameplay to cycle through all available color themes</em>
+  </div>
+
 - **CRT Effects Toggle**: Scanlines and vignette for authentic retro feel
 - **Adjustable Difficulty**: Fine-tuned spawn rates and enemy behavior
 
@@ -221,7 +228,7 @@ See [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) for detailed br
 
 **Technique Stack:**
 ```python
-# 1. SRCALPHA Surfaces for Transparency
+![1760673245744](image/README/1760673245744.png)![1760673252305](image/README/1760673252305.png)![1760673255510](image/README/1760673255510.png)# 1. SRCALPHA Surfaces for Transparency
 glow_surf = pygame.Surface((size, size), pygame.SRCALPHA)
 
 # 2. Multi-Layer Glow (2-3 layers optimized)

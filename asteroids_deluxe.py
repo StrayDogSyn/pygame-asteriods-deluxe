@@ -29,16 +29,16 @@ class ColorScheme:
         
 # Available color schemes
 SCHEMES = [
+    ColorScheme("CLASSIC", (0, 0, 0), (255, 255, 255), (200, 200, 200), (255, 255, 100), (100, 100, 100), (255, 255, 255)),  # Default - Classic arcade
     ColorScheme("MATRIX", (0, 10, 0), (0, 255, 70), (0, 200, 50), (0, 255, 150), (0, 100, 30), (150, 255, 150)),
     ColorScheme("AMBER TERMINAL", (10, 5, 0), (255, 176, 0), (200, 140, 0), (255, 200, 50), (100, 70, 0), (255, 220, 100)),
     ColorScheme("GREEN PHOSPHOR", (0, 5, 0), (51, 255, 51), (30, 200, 30), (100, 255, 100), (20, 100, 20), (200, 255, 200)),
     ColorScheme("BLUE TERMINAL", (0, 0, 10), (100, 200, 255), (50, 150, 255), (150, 220, 255), (30, 80, 120), (200, 230, 255)),
     ColorScheme("RED ALERT", (10, 0, 0), (255, 50, 50), (200, 30, 30), (255, 100, 100), (100, 20, 20), (255, 150, 150)),
-    ColorScheme("CLASSIC", (0, 0, 0), (255, 255, 255), (200, 200, 200), (255, 255, 100), (100, 100, 100), (255, 255, 255)),
     ColorScheme("CYAN TERM", (0, 10, 10), (0, 255, 255), (0, 200, 200), (100, 255, 255), (0, 100, 100), (150, 255, 255)),
 ]
 
-current_scheme_index = 0
+current_scheme_index = 0  # Starts with CLASSIC (index 0)
 current_scheme = SCHEMES[current_scheme_index]
 
 # ============================================================================
@@ -235,49 +235,50 @@ def draw_glass_panel(screen, rect, base_color, alpha=100, border_width=2):
 try:
     # Laser sounds - we'll cycle through these
     laser_sounds = [
-        pygame.mixer.Sound('pygame/sounds/retro-laser-shot-04.wav'),
-        pygame.mixer.Sound('pygame/sounds/retro-laser-shot-05.wav'),
-        pygame.mixer.Sound('pygame/sounds/retro-laser-shot-06.wav'),
-        pygame.mixer.Sound('pygame/sounds/puny_laser.wav'),
+        pygame.mixer.Sound('sounds/retro-laser-shot-04.wav'),
+        pygame.mixer.Sound('sounds/retro-laser-shot-05.wav'),
+        pygame.mixer.Sound('sounds/retro-laser-shot-06.wav'),
+        pygame.mixer.Sound('sounds/puny_laser.wav'),
     ]
     current_laser_index = 0
 
-    # Big laser for UFO - try laser-element or fallback to first retro laser
-    try:
-        ufo_laser_sound = pygame.mixer.Sound('pygame/sounds/laser-element-only-2.wav')
-    except:
-        ufo_laser_sound = laser_sounds[0]  # Fallback to a regular laser
+    # Big laser for UFO - laser-element sound
+    ufo_laser_sound = pygame.mixer.Sound('sounds/laser-element-only-2.wav')
+    
+    # Big laser beam for bomb/screen-clear effect
+    big_laser_sound = pygame.mixer.Sound('sounds/big-laser-beam.mp3')
 
     # Explosion sounds - randomize for variety
     explosion_sounds = [
-        pygame.mixer.Sound('pygame/sounds/explosion_asteroid.wav'),
-        pygame.mixer.Sound('pygame/sounds/explosion_asteroid2.wav'),
-        pygame.mixer.Sound('pygame/sounds/space-explosion.wav'),
-        pygame.mixer.Sound('pygame/sounds/pelicula-sfx.wav'),
+        pygame.mixer.Sound('sounds/explosion_asteroid.wav'),
+        pygame.mixer.Sound('sounds/explosion_asteroid2.wav'),
+        pygame.mixer.Sound('sounds/space-explosion.wav'),
+        pygame.mixer.Sound('sounds/pelicula-sfx.wav'),
     ]
 
     # Achievement/Level up sounds
     achievement_sounds = [
-        pygame.mixer.Sound('pygame/sounds/achievement.wav'),
-        pygame.mixer.Sound('pygame/sounds/jingle_achievement_00.wav'),
-        pygame.mixer.Sound('pygame/sounds/jingle_achievement_01.wav'),
+        pygame.mixer.Sound('sounds/achievement.wav'),
+        pygame.mixer.Sound('sounds/jingle_achievement_00.wav'),
+        pygame.mixer.Sound('sounds/jingle_achievement_01.wav'),
     ]
 
     # Level up sounds - NOTE: These are MP3 files!
     # pygame.mixer.Sound works with mp3 on most systems
     level_up_sounds = [
-        pygame.mixer.Sound('pygame/sounds/level-up-01.mp3'),
-        pygame.mixer.Sound('pygame/sounds/level-up-02.mp3'),
-        pygame.mixer.Sound('pygame/sounds/level-up-03.mp3'),
+        pygame.mixer.Sound('sounds/level-up-01.mp3'),
+        pygame.mixer.Sound('sounds/level-up-02.mp3'),
+        pygame.mixer.Sound('sounds/level-up-03.mp3'),
     ]
 
     # Power-up/special sounds
-    powerup_sound = pygame.mixer.Sound('pygame/sounds/magic-reveal.wav')
+    powerup_sound = pygame.mixer.Sound('sounds/magic-reveal.wav')
     
     # Adjust volumes for balance
     for sound in laser_sounds:
         sound.set_volume(0.3)
     ufo_laser_sound.set_volume(0.4)
+    big_laser_sound.set_volume(0.7)  # Powerful bomb sound
     for sound in explosion_sounds:
         sound.set_volume(0.5)
     for sound in achievement_sounds:
@@ -302,6 +303,7 @@ except Exception as e:
     laser_sounds = [DummySound() for _ in range(4)]
     current_laser_index = 0
     ufo_laser_sound = DummySound()
+    big_laser_sound = DummySound()
     explosion_sounds = [DummySound() for _ in range(4)]
     achievement_sounds = [DummySound() for _ in range(3)]
     level_up_sounds = [DummySound() for _ in range(3)]
@@ -1171,7 +1173,7 @@ class PowerUp:
     def __init__(self, x, y, power_type):
         self.x = x
         self.y = y
-        self.power_type = power_type  # 'rapid_fire' or 'shield'
+        self.power_type = power_type  # 'rapid_fire', 'shield', or 'bomb'
         self.radius = 15
         self.lifetime = 600  # Disappears after 10 seconds
         self.pulse = 0
@@ -1179,8 +1181,10 @@ class PowerUp:
         # Power-ups keep distinct colors but use scheme's bright for visibility
         if power_type == 'rapid_fire':
             self.symbol = 'R'
-        else:  # shield
+        elif power_type == 'shield':
             self.symbol = 'S'
+        else:  # bomb
+            self.symbol = 'B'
     
     def update(self):
         self.lifetime -= 1
@@ -1704,7 +1708,7 @@ while running:
                     
                     # Chance to spawn power-up from destroyed asteroid
                     if random.random() < 0.1:  # 10% chance
-                        power_type = random.choice(['rapid_fire', 'shield'])
+                        power_type = random.choice(['rapid_fire', 'shield', 'bomb'])
                         powerups.append(PowerUp(asteroid.x, asteroid.y, power_type))
                     
                     hit = True
@@ -1791,14 +1795,27 @@ while running:
         for powerup in powerups[:]:
             if powerup.check_collision_ship(ship):
                 powerups.remove(powerup)
-                powerup_sound.play()
 
                 if powerup.power_type == 'rapid_fire':
+                    powerup_sound.play()
                     ship.rapid_fire = True
                     ship.rapid_fire_timer = 300  # 5 seconds
-                else:  # shield
+                elif powerup.power_type == 'shield':
+                    powerup_sound.play()
                     ship.shield = True
                     ship.shield_timer = 300
+                else:  # bomb - screen clear!
+                    big_laser_sound.play()  # Epic bomb sound
+                    # Destroy all asteroids and create massive particle effects
+                    for asteroid in asteroids[:]:
+                        create_explosion(asteroid.x, asteroid.y, particles)
+                        score += asteroid.points
+                    asteroids.clear()
+                    # Destroy UFO if present
+                    if ufo:
+                        create_explosion(ufo.x, ufo.y, particles)
+                        score += 200
+                        ufo = None
 
                 break
         
@@ -1862,9 +1879,9 @@ while running:
         # Draw ship
         ship.draw(screen)
         
-        # Draw scanlines and vignette
-        draw_scanlines(screen)
-        draw_vignette(screen)
+        # CRT effects removed - was causing visual artifacts in center of screen
+        # draw_scanlines(screen)
+        # draw_vignette(screen)
 
         # Draw modern HUD with panels
         # Top-left info panel
@@ -1936,8 +1953,9 @@ while running:
     
     else:
         # Game over screen with modern terminal panel
-        draw_scanlines(screen)
-        draw_vignette(screen)
+        # CRT effects removed - was causing visual artifacts
+        # draw_scanlines(screen)
+        # draw_vignette(screen)
 
         # Center panel
         panel_width = 600
