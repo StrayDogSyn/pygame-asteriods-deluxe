@@ -1,6 +1,8 @@
 import pygame
 import random
 import math
+import json
+import os
 
 # Initialize pygame
 pygame.init()
@@ -231,6 +233,62 @@ def draw_glass_panel(screen, rect, base_color, alpha=100, border_width=2):
 # END 16-BIT GRAPHICS HELPER FUNCTIONS
 # ============================================================================
 
+# ============================================================================
+# HI-SCORE MANAGEMENT
+# ============================================================================
+
+HISCORE_FILE = 'hiscores.json'
+
+def load_hiscores():
+    """Load hi-scores from file. Returns list of top 5 scores."""
+    if os.path.exists(HISCORE_FILE):
+        try:
+            with open(HISCORE_FILE, 'r') as f:
+                scores = json.load(f)
+                # Ensure we have valid data
+                if isinstance(scores, list):
+                    return scores[:5]  # Return top 5
+        except (json.JSONDecodeError, IOError):
+            pass
+    return []  # Return empty list if no valid data
+
+def save_hiscores(scores):
+    """Save hi-scores to file."""
+    try:
+        with open(HISCORE_FILE, 'w') as f:
+            json.dump(scores[:5], f, indent=2)  # Save only top 5
+    except IOError:
+        pass  # Fail silently if can't save
+
+def update_hiscores(new_score):
+    """Add new score to hi-score list and return updated list and rank (1-5, or 0 if not in top 5)."""
+    scores = load_hiscores()
+    
+    # Add new score
+    scores.append(new_score)
+    
+    # Sort by score descending
+    scores.sort(reverse=True)
+    
+    # Find rank of new score (1-based)
+    rank = 0
+    for i, score in enumerate(scores[:5]):
+        if score == new_score:
+            rank = i + 1
+            break
+    
+    # Keep only top 5
+    scores = scores[:5]
+    
+    # Save updated scores
+    save_hiscores(scores)
+    
+    return scores, rank
+
+# ============================================================================
+# END HI-SCORE MANAGEMENT
+# ============================================================================
+
 # Sound effects - load from /sounds directory
 try:
     # Laser sounds - we'll cycle through these
@@ -401,11 +459,14 @@ class Ship:
         self.angle = 0
         self.vx = 0
         self.vy = 0
-        self.rotation_speed = 5
-        self.thrust_power = 0.2
-        self.max_speed = 8
-        self.friction = 0.99
+        self.rotation_speed = 3.5  # Reduced from 5 for more realistic inertia
+        self.thrust_power = 0.15  # Reduced from 0.2 for more careful control
+        self.reverse_thrust_power = 0.08  # Reduced from 0.1 (still 50% of forward)
+        self.max_speed = 10  # Slightly increased since it's harder to reach now
+        self.friction = 1.0  # Changed from 0.99 to 1.0 for true zero-gravity (no friction)
         self.radius = 15
+        self.angular_velocity = 0  # New: rotational inertia
+        self.rotation_damping = 0.92  # New: gradual rotation slowdown
         
         # Power-ups
         self.rapid_fire = False
@@ -423,12 +484,23 @@ class Ship:
         self.is_thrusting = False
     
     def handle_input(self, keys, particles):
-        """Handle rotation, thrust, and special abilities"""
-        # Arrow key controls
+        """Handle rotation, thrust, and special abilities with realistic physics"""
+        # Arrow key controls with rotational inertia
         if keys[pygame.K_LEFT]:
-            self.angle -= self.rotation_speed
+            self.angular_velocity -= self.rotation_speed * 0.15  # Apply rotational force
         if keys[pygame.K_RIGHT]:
-            self.angle += self.rotation_speed
+            self.angular_velocity += self.rotation_speed * 0.15  # Apply rotational force
+        
+        # Apply angular velocity to rotation
+        self.angle += self.angular_velocity
+        
+        # Apply rotational damping (gradual slowdown)
+        self.angular_velocity *= self.rotation_damping
+        
+        # Cap angular velocity to prevent spinning out of control
+        max_angular_velocity = 6
+        if abs(self.angular_velocity) > max_angular_velocity:
+            self.angular_velocity = max_angular_velocity if self.angular_velocity > 0 else -max_angular_velocity
 
         self.is_thrusting = False
         if keys[pygame.K_UP]:
@@ -446,6 +518,23 @@ class Ship:
 
             # Spawn thrust particles
             self.spawn_thrust_particles(particles)
+        
+        # Backwards thrust (DOWN arrow) - weaker for strategic braking/reversing
+        elif keys[pygame.K_DOWN]:
+            self.is_thrusting = True
+            # Thrust opposite to the direction we're facing (backwards)
+            rad = math.radians(self.angle)
+            self.vx -= math.sin(rad) * self.reverse_thrust_power
+            self.vy += math.cos(rad) * self.reverse_thrust_power
+
+            # Cap max speed (same limit)
+            speed = math.sqrt(self.vx**2 + self.vy**2)
+            if speed > self.max_speed:
+                self.vx = (self.vx / speed) * self.max_speed
+                self.vy = (self.vy / speed) * self.max_speed
+
+            # Spawn reverse thrust particles (from the front of the ship)
+            self.spawn_reverse_thrust_particles(particles)
 
         # Hyperspace jump (LSHIFT)
         if keys[pygame.K_LSHIFT] and self.hyperspace_cooldown <= 0:
@@ -467,6 +556,22 @@ class Ship:
             # Use accent color for thrust
             particles.append(Particle(back_x, back_y, particle_vx, particle_vy, 
                                     'accent', lifetime=20))
+    
+    def spawn_reverse_thrust_particles(self, particles):
+        """Create particles at the front of the ship when reverse thrusting"""
+        if random.random() < 0.5:  # Don't spawn every frame
+            rad = math.radians(self.angle)
+            # Position particles at the front of the ship
+            front_x = self.x + math.sin(rad) * self.radius
+            front_y = self.y - math.cos(rad) * self.radius
+            
+            # Particles move opposite to reverse thrust direction (forward)
+            particle_vx = self.vx + math.sin(rad) * 2 + random.uniform(-1, 1)
+            particle_vy = self.vy - math.cos(rad) * 2 + random.uniform(-1, 1)
+            
+            # Use secondary color for reverse thrust (to differentiate from forward)
+            particles.append(Particle(front_x, front_y, particle_vx, particle_vy, 
+                                    'secondary', lifetime=15))
     
     def hyperspace_jump(self, particles):
         """Teleport to random location with particle effect - OPTIMIZED"""
@@ -496,7 +601,9 @@ class Ship:
         # Handled by collision detection
     
     def update(self):
-        """Apply velocity and friction"""
+        """Apply velocity with true zero-gravity physics (no friction)"""
+        # In true zero gravity, friction = 1.0 means no slowdown
+        # Velocity only changes when thrust is applied
         self.vx *= self.friction
         self.vy *= self.friction
         
@@ -1183,8 +1290,16 @@ class PowerUp:
             self.symbol = 'R'
         elif power_type == 'shield':
             self.symbol = 'S'
-        else:  # bomb
+        elif power_type == 'bomb':
             self.symbol = 'B'
+        elif power_type == 'piercing':
+            self.symbol = 'P'  # Piercing ammo
+        elif power_type == 'explosive':
+            self.symbol = 'E'  # Explosive ammo
+        elif power_type == 'spread':
+            self.symbol = 'M'  # Multi-shot (spread)
+        else:
+            self.symbol = '?'
     
     def update(self):
         self.lifetime -= 1
@@ -1247,10 +1362,493 @@ class PowerUp:
         return distance < self.radius + ship.radius
 
 
+# ============================================================================
+# ENHANCED BULLET TYPES - Ammo Variations System
+# ============================================================================
+
+class SpecialBullet(Bullet):
+    """Enhanced bullet with special properties"""
+    def __init__(self, x, y, vx, vy, bullet_type='normal'):
+        super().__init__(x, y, vx, vy)
+        self.bullet_type = bullet_type
+        self.damage = 1
+        self.penetration = 1  # How many asteroids it can pierce
+        
+        if bullet_type == 'piercing':
+            self.damage = 1
+            self.penetration = 3  # Pierce through 3 asteroids
+            self.lifetime = 90
+            self.radius = 4
+        elif bullet_type == 'explosive':
+            self.damage = 2  # Double damage
+            self.penetration = 1
+            self.lifetime = 45
+            self.radius = 6
+        elif bullet_type == 'spread':
+            self.damage = 1
+            self.penetration = 1
+            self.lifetime = 50
+            self.radius = 2
+    
+    def draw(self, screen):
+        """Draw bullet with type-specific visual"""
+        if self.bullet_type == 'piercing':
+            # Blue piercing beam
+            for i in range(2, 0, -1):
+                glow_radius = self.radius + i * 4
+                alpha = int(120 * (i / 2))
+                glow_color = (100, 150, 255, alpha)
+                surf = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, glow_color, (glow_radius, glow_radius), glow_radius)
+                screen.blit(surf, (int(self.x - glow_radius), int(self.y - glow_radius)))
+            pygame.draw.circle(screen, (150, 200, 255), (int(self.x), int(self.y)), self.radius)
+            
+        elif self.bullet_type == 'explosive':
+            # Red explosive shot
+            for i in range(3, 0, -1):
+                glow_radius = self.radius + i * 3
+                alpha = int(100 * (i / 3))
+                glow_color = (255, 100, 50, alpha)
+                surf = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, glow_color, (glow_radius, glow_radius), glow_radius)
+                screen.blit(surf, (int(self.x - glow_radius), int(self.y - glow_radius)))
+            pygame.draw.circle(screen, (255, 150, 50), (int(self.x), int(self.y)), self.radius)
+            
+        elif self.bullet_type == 'spread':
+            # Green spread shot
+            pygame.draw.circle(screen, (100, 255, 100), (int(self.x), int(self.y)), self.radius)
+        else:
+            super().draw(screen)
+
+
+# ============================================================================
+# BOSS ENCOUNTER SYSTEM
+# ============================================================================
+
+class Boss:
+    """Epic boss encounter every 5 waves"""
+    def __init__(self, wave):
+        self.x = WIDTH // 2
+        self.y = 50
+        self.wave = wave
+        self.health = 100 + (wave // 5) * 50  # Scale health with progression
+        self.max_health = self.health
+        self.radius = 60
+        self.phase = 1  # Boss has 3 phases
+        self.vx = 2
+        self.rotation = 0
+        self.shoot_timer = 0
+        self.shoot_cooldown = 40
+        self.special_attack_timer = 0
+        self.special_cooldown = 180  # 3 seconds
+        self.spawn_minion_timer = 0
+        self.minion_cooldown = 300  # 5 seconds
+        
+    def update(self):
+        # Move horizontally
+        self.x += self.vx
+        if self.x < 100 or self.x > WIDTH - 100:
+            self.vx *= -1
+        
+        # Rotate
+        self.rotation += 1
+        
+        # Update timers
+        self.shoot_timer += 1
+        self.special_attack_timer += 1
+        self.spawn_minion_timer += 1
+        
+        # Phase transitions based on health
+        health_percent = self.health / self.max_health
+        if health_percent < 0.33:
+            self.phase = 3
+            self.shoot_cooldown = 20  # Faster shooting
+        elif health_percent < 0.66:
+            self.phase = 2
+            self.shoot_cooldown = 30
+    
+    def shoot(self):
+        """Boss shooting patterns"""
+        if self.shoot_timer >= self.shoot_cooldown:
+            self.shoot_timer = 0
+            bullets = []
+            
+            if self.phase == 1:
+                # Phase 1: Triple shot
+                for angle in [-20, 0, 20]:
+                    rad = math.radians(angle + 90)
+                    vx = math.cos(rad) * 4
+                    vy = math.sin(rad) * 4
+                    bullets.append(UFOBullet(self.x, self.y, vx, vy))
+            
+            elif self.phase == 2:
+                # Phase 2: Circular burst
+                for angle in range(0, 360, 45):
+                    rad = math.radians(angle)
+                    vx = math.cos(rad) * 3
+                    vy = math.sin(rad) * 3
+                    bullets.append(UFOBullet(self.x, self.y, vx, vy))
+            
+            else:  # Phase 3
+                # Phase 3: Spiral pattern
+                for i in range(12):
+                    angle = (self.rotation * 3 + i * 30) % 360
+                    rad = math.radians(angle)
+                    vx = math.cos(rad) * 4
+                    vy = math.sin(rad) * 4
+                    bullets.append(UFOBullet(self.x, self.y, vx, vy))
+            
+            return bullets
+        return []
+    
+    def special_attack(self):
+        """Boss special abilities"""
+        if self.special_attack_timer >= self.special_cooldown:
+            self.special_attack_timer = 0
+            return 'laser_sweep'  # Signal for special attack
+        return None
+    
+    def spawn_minions(self):
+        """Spawn smaller enemy ships"""
+        if self.spawn_minion_timer >= self.minion_cooldown and self.phase >= 2:
+            self.spawn_minion_timer = 0
+            return True
+        return False
+    
+    def take_damage(self, damage):
+        """Boss takes damage"""
+        self.health -= damage
+        return self.health <= 0
+    
+    def draw(self, screen):
+        """Draw intimidating boss ship"""
+        # Outer glow based on phase
+        phase_colors = [
+            (255, 100, 100),  # Phase 1: Red
+            (255, 150, 0),    # Phase 2: Orange
+            (255, 50, 255)    # Phase 3: Purple
+        ]
+        color = phase_colors[self.phase - 1]
+        
+        # Pulsing glow
+        pulse = abs(math.sin(self.rotation * 0.05))
+        for i in range(4, 0, -1):
+            glow_radius = self.radius + i * 10 * pulse
+            alpha = int(80 * (i / 4))
+            glow_color = (*color, alpha)
+            surf = pygame.Surface((int(glow_radius * 2), int(glow_radius * 2)), pygame.SRCALPHA)
+            pygame.draw.circle(surf, glow_color, (int(glow_radius), int(glow_radius)), int(glow_radius))
+            screen.blit(surf, (int(self.x - glow_radius), int(self.y - glow_radius)))
+        
+        # Main body - menacing octagon
+        points = []
+        for i in range(8):
+            angle = math.radians(i * 45 + self.rotation)
+            px = self.x + math.cos(angle) * self.radius
+            py = self.y + math.sin(angle) * self.radius
+            points.append((px, py))
+        
+        pygame.draw.polygon(screen, color, points, 0)
+        pygame.draw.polygon(screen, current_scheme.bright, points, 3)
+        
+        # Inner core
+        inner_radius = self.radius * 0.4
+        pygame.draw.circle(screen, current_scheme.bright, (int(self.x), int(self.y)), int(inner_radius))
+        
+        # Health bar above boss
+        bar_width = 200
+        bar_height = 10
+        bar_x = self.x - bar_width // 2
+        bar_y = self.y - self.radius - 30
+        
+        # Background
+        pygame.draw.rect(screen, (50, 50, 50), (bar_x, bar_y, bar_width, bar_height))
+        # Health fill
+        health_width = int(bar_width * (self.health / self.max_health))
+        health_color = (255, 50, 50) if self.health < self.max_health * 0.3 else (255, 200, 0)
+        pygame.draw.rect(screen, health_color, (bar_x, bar_y, health_width, bar_height))
+        # Border
+        pygame.draw.rect(screen, current_scheme.primary, (bar_x, bar_y, bar_width, bar_height), 2)
+        
+        # Phase indicator
+        phase_text = tiny_font.render(f'PHASE {self.phase}', True, color)
+        phase_rect = phase_text.get_rect(center=(int(self.x), int(bar_y - 15)))
+        screen.blit(phase_text, phase_rect)
+    
+    def check_collision_bullet(self, bullet):
+        """Check if bullet hits boss"""
+        distance = math.sqrt((self.x - bullet.x)**2 + (self.y - bullet.y)**2)
+        return distance < self.radius
+
+
+# ============================================================================
+# ENVIRONMENTAL EVENTS - Wrath of God System
+# ============================================================================
+
+class EnvironmentalEvent:
+    """Random catastrophic events player must survive"""
+    def __init__(self, event_type):
+        self.type = event_type
+        self.duration = 600  # 10 seconds
+        self.timer = 0
+        self.active = True
+        self.warning_time = 120  # 2 second warning
+        
+        if event_type == 'asteroid_storm':
+            self.name = "ASTEROID STORM"
+            self.description = "Survive the onslaught!"
+        elif event_type == 'gravity_well':
+            self.name = "GRAVITY ANOMALY"
+            self.description = "Pull toward center!"
+        elif event_type == 'emp_pulse':
+            self.name = "EMP PULSE"
+            self.description = "Weapons offline!"
+        elif event_type == 'solar_flare':
+            self.name = "SOLAR FLARE"
+            self.description = "Visibility reduced!"
+        elif event_type == 'meteor_shower':
+            self.name = "METEOR SHOWER"
+            self.description = "Incoming from above!"
+    
+    def update(self, ship, asteroids):
+        """Apply event effects"""
+        self.timer += 1
+        
+        if self.timer > self.duration:
+            self.active = False
+            return
+        
+        # Skip warning phase
+        if self.timer < self.warning_time:
+            return
+        
+        # Apply effects
+        if self.type == 'gravity_well':
+            # Pull ship toward center
+            center_x, center_y = WIDTH // 2, HEIGHT // 2
+            dx = center_x - ship.x
+            dy = center_y - ship.y
+            distance = math.sqrt(dx**2 + dy**2)
+            if distance > 0:
+                pull_strength = 0.3
+                ship.vx += (dx / distance) * pull_strength
+                ship.vy += (dy / distance) * pull_strength
+        
+        elif self.type == 'asteroid_storm' and self.timer % 20 == 0:
+            # Spawn extra asteroids from edges
+            side = random.choice(['top', 'bottom', 'left', 'right'])
+            if side == 'top':
+                x, y = random.randint(0, WIDTH), 0
+            elif side == 'bottom':
+                x, y = random.randint(0, WIDTH), HEIGHT
+            elif side == 'left':
+                x, y = 0, random.randint(0, HEIGHT)
+            else:
+                x, y = WIDTH, random.randint(0, HEIGHT)
+            
+            asteroids.append(Asteroid(x, y, 'small'))
+    
+    def can_shoot(self):
+        """Check if weapons are available during event"""
+        if self.type == 'emp_pulse':
+            return self.timer < self.warning_time or self.timer > self.duration - 60
+        return True
+    
+    def get_visibility_alpha(self):
+        """Reduce visibility during solar flare"""
+        if self.type == 'solar_flare' and self.timer >= self.warning_time:
+            return 150  # Darken screen
+        return 0
+    
+    def draw(self, screen):
+        """Draw event warnings and effects"""
+        if self.timer < self.warning_time:
+            # Warning phase
+            warning_alpha = int(200 * abs(math.sin(self.timer * 0.1)))
+            warning_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            pygame.draw.rect(warning_surf, (255, 0, 0, warning_alpha), (0, 0, WIDTH, HEIGHT), 10)
+            screen.blit(warning_surf, (0, 0))
+            
+            # Warning text
+            warning_text = large_font.render("WARNING!", True, (255, 50, 50))
+            warning_rect = warning_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 50))
+            screen.blit(warning_text, warning_rect)
+            
+            event_text = font.render(self.name, True, (255, 200, 0))
+            event_rect = event_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30))
+            screen.blit(event_text, event_rect)
+            
+            desc_text = small_font.render(self.description, True, current_scheme.dim)
+            desc_rect = desc_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 70))
+            screen.blit(desc_text, desc_rect)
+        else:
+            # Active event indicator
+            remaining = (self.duration - self.timer) / 60
+            event_text = small_font.render(f'{self.name}: {remaining:.1f}s', True, (255, 150, 0))
+            screen.blit(event_text, (WIDTH - 250, 10))
+            
+            # Visual effects
+            if self.type == 'gravity_well':
+                # Draw gravity well visualization
+                center_x, center_y = WIDTH // 2, HEIGHT // 2
+                for i in range(3, 0, -1):
+                    pulse = abs(math.sin(self.timer * 0.1))
+                    radius = 100 * i * (1 + pulse * 0.2)
+                    alpha = int(50 / i)
+                    surf = pygame.Surface((int(radius * 2), int(radius * 2)), pygame.SRCALPHA)
+                    pygame.draw.circle(surf, (150, 50, 255, alpha), (int(radius), int(radius)), int(radius), 3)
+                    screen.blit(surf, (center_x - radius, center_y - radius))
+            
+            elif self.type == 'solar_flare':
+                # Overlay darkening
+                alpha = self.get_visibility_alpha()
+                if alpha > 0:
+                    dark_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                    pygame.draw.rect(dark_surf, (255, 200, 100, alpha), (0, 0, WIDTH, HEIGHT))
+                    screen.blit(dark_surf, (0, 0))
+
+
+# ============================================================================
+# NPC ALLY SYSTEM
+# ============================================================================
+
+class AllyShip:
+    """Friendly NPC that assists the player"""
+    def __init__(self, x, y, ally_type='fighter'):
+        self.x = x
+        self.y = y
+        self.vx = random.uniform(-2, 2)
+        self.vy = random.uniform(-2, 2)
+        self.type = ally_type
+        self.radius = 15
+        self.rotation = random.randint(0, 360)
+        self.shoot_timer = 0
+        self.lifetime = 900  # 15 seconds
+        self.target = None
+        
+        if ally_type == 'fighter':
+            self.shoot_cooldown = 30
+            self.speed = 3
+        elif ally_type == 'bomber':
+            self.shoot_cooldown = 60
+            self.speed = 2
+        elif ally_type == 'defender':
+            self.shoot_cooldown = 45
+            self.speed = 2.5
+    
+    def update(self, asteroids, player_ship):
+        """AI behavior"""
+        self.lifetime -= 1
+        self.shoot_timer += 1
+        
+        # Find nearest threat
+        min_dist = float('inf')
+        self.target = None
+        for asteroid in asteroids:
+            dist = math.sqrt((self.x - asteroid.x)**2 + (self.y - asteroid.y)**2)
+            if dist < min_dist:
+                min_dist = dist
+                self.target = asteroid
+        
+        # Move toward threat or player
+        if self.target:
+            dx = self.target.x - self.x
+            dy = self.target.y - self.y
+        else:
+            # Stay near player
+            dx = player_ship.x - self.x
+            dy = player_ship.y - self.y
+        
+        distance = math.sqrt(dx**2 + dy**2)
+        if distance > 100:  # Maintain distance
+            self.vx += (dx / distance) * 0.1
+            self.vy += (dy / distance) * 0.1
+        
+        # Speed limit
+        speed = math.sqrt(self.vx**2 + self.vy**2)
+        if speed > self.speed:
+            self.vx = (self.vx / speed) * self.speed
+            self.vy = (self.vy / speed) * self.speed
+        
+        # Move
+        self.x += self.vx
+        self.y += self.vy
+        
+        # Wrap around
+        if self.x < 0:
+            self.x = WIDTH
+        elif self.x > WIDTH:
+            self.x = 0
+        if self.y < 0:
+            self.y = HEIGHT
+        elif self.y > HEIGHT:
+            self.y = 0
+        
+        # Rotate toward target
+        if self.target:
+            target_angle = math.degrees(math.atan2(dy, dx))
+            self.rotation = target_angle
+    
+    def shoot(self):
+        """Ally shoots at threats"""
+        if self.shoot_timer >= self.shoot_cooldown and self.target:
+            self.shoot_timer = 0
+            
+            # Calculate shot direction
+            dx = self.target.x - self.x
+            dy = self.target.y - self.y
+            distance = math.sqrt(dx**2 + dy**2)
+            
+            if distance > 0:
+                vx = (dx / distance) * 8
+                vy = (dy / distance) * 8
+                return Bullet(self.x, self.y, vx, vy)
+        return None
+    
+    def is_expired(self):
+        return self.lifetime <= 0
+    
+    def draw(self, screen):
+        """Draw ally ship with friendly colors"""
+        # Green glow for ally
+        for i in range(2, 0, -1):
+            glow_radius = self.radius + i * 8
+            alpha = int(100 * (i / 2))
+            glow_color = (50, 255, 50, alpha)
+            surf = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
+            pygame.draw.circle(surf, glow_color, (glow_radius, glow_radius), glow_radius)
+            screen.blit(surf, (int(self.x - glow_radius), int(self.y - glow_radius)))
+        
+        # Ship body - triangle pointing toward target
+        rad = math.radians(self.rotation)
+        points = [
+            (self.x + math.cos(rad) * self.radius,
+             self.y + math.sin(rad) * self.radius),
+            (self.x + math.cos(rad + 2.5) * self.radius * 0.7,
+             self.y + math.sin(rad + 2.5) * self.radius * 0.7),
+            (self.x + math.cos(rad - 2.5) * self.radius * 0.7,
+             self.y + math.sin(rad - 2.5) * self.radius * 0.7)
+        ]
+        
+        pygame.draw.polygon(screen, (100, 255, 100), points, 0)
+        pygame.draw.polygon(screen, (150, 255, 150), points, 2)
+        
+        # Lifetime indicator (small green bar)
+        bar_width = 20
+        bar_height = 3
+        bar_x = self.x - bar_width // 2
+        bar_y = self.y - self.radius - 10
+        life_percent = self.lifetime / 900
+        pygame.draw.rect(screen, (50, 255, 50), (bar_x, bar_y, int(bar_width * life_percent), bar_height))
+
+
 def spawn_asteroids(count, size='large', wave=1):
-    """Create asteroids, more on higher waves"""
+    """Create asteroids, more on higher waves with progressive difficulty"""
     asteroids = []
-    actual_count = count + (wave - 1)  # Add more asteroids each wave
+    # Enhanced difficulty scaling
+    base_count = count
+    wave_multiplier = min(1 + (wave - 1) * 0.5, 3)  # Cap at 3x
+    actual_count = int(base_count * wave_multiplier)
     
     for _ in range(actual_count):
         while True:
@@ -1573,6 +2171,10 @@ lives = 3
 wave = 1
 game_over = False
 
+# Hi-score system
+hiscores = load_hiscores()
+new_hiscore_rank = 0  # Track if current game made top 5 (1-5, or 0 if not)
+
 # Modern terminal fonts with better hierarchy
 font = pygame.font.Font(None, 42)
 small_font = pygame.font.Font(None, 28)
@@ -1587,6 +2189,37 @@ RAPID_FIRE_DELAY = 5
 # UFO spawn timer
 ufo_spawn_timer = 0
 UFO_SPAWN_DELAY = 600  # Every 10 seconds
+
+# ============================================================================
+# NEW GAMEPLAY SYSTEMS
+# ============================================================================
+
+# Boss system
+boss = None
+boss_wave_interval = 5  # Boss every 5 waves
+
+# Ammo system
+current_ammo_type = 'normal'
+ammo_counts = {
+    'piercing': 30,
+    'explosive': 20,
+    'spread': 50
+}
+
+# Environmental events
+current_event = None
+event_chance = 0.15  # 15% chance per wave
+last_event_wave = 0
+
+# Ally NPC system  
+allies = []
+ally_spawn_chance = 0.20  # 20% chance when taking damage
+last_ally_wave = 0
+
+# Difficulty scaling
+difficulty_multiplier = 1.0
+asteroid_speed_multiplier = 1.0
+ufo_accuracy_multiplier = 1.0
 
 # Game loop
 running = True
@@ -1624,6 +2257,7 @@ while running:
                 lives = 3
                 wave = 1
                 game_over = False
+                new_hiscore_rank = 0  # Reset hi-score rank for new game
     
     if not game_over:
         keys = pygame.key.get_pressed()
@@ -1631,11 +2265,36 @@ while running:
         # Handle ship input
         ship.handle_input(keys, particles)
 
-        # Shooting (LCTRL)
+        # Shooting (LCTRL) - Check for EMP event
+        can_shoot = True
+        if current_event:
+            can_shoot = current_event.can_shoot()
+        
         delay = RAPID_FIRE_DELAY if ship.rapid_fire else SHOOT_DELAY
 
-        if keys[pygame.K_LCTRL] and shoot_cooldown <= 0:
-            bullets.append(ship.shoot())
+        if keys[pygame.K_LCTRL] and shoot_cooldown <= 0 and can_shoot:
+            # Use normal bullet or special ammo
+            if current_ammo_type != 'normal' and ammo_counts[current_ammo_type] > 0:
+                # Shoot special bullet
+                base_bullet = ship.shoot()
+                if current_ammo_type == 'spread':
+                    # Spread shot: 3 bullets in a spread pattern
+                    for angle_offset in [-15, 0, 15]:
+                        rad = math.radians(ship.angle + angle_offset)
+                        vx = math.cos(rad) * 10
+                        vy = math.sin(rad) * 10
+                        bullets.append(SpecialBullet(ship.x, ship.y, vx, vy, 'spread'))
+                else:
+                    bullets.append(SpecialBullet(base_bullet.x, base_bullet.y, 
+                                                 base_bullet.vx, base_bullet.vy, current_ammo_type))
+                ammo_counts[current_ammo_type] -= 1
+                
+                # Switch back to normal when out
+                if ammo_counts[current_ammo_type] <= 0:
+                    current_ammo_type = 'normal'
+            else:
+                bullets.append(ship.shoot())
+            
             shoot_cooldown = delay
 
         if shoot_cooldown > 0:
@@ -1687,6 +2346,49 @@ while running:
             if powerup.is_expired():
                 powerups.remove(powerup)
         
+        # Update boss
+        if boss:
+            boss.update()
+            
+            # Boss shooting
+            new_bullets = boss.shoot()
+            ufo_bullets.extend(new_bullets)
+            
+            # Boss special attacks
+            special = boss.special_attack()
+            if special == 'laser_sweep':
+                # Create dramatic laser sweep effect
+                for angle in range(0, 360, 10):
+                    rad = math.radians(angle)
+                    vx = math.cos(rad) * 6
+                    vy = math.sin(rad) * 6
+                    ufo_bullets.append(UFOBullet(boss.x, boss.y, vx, vy))
+                play_explosion_sound()
+            
+            # Boss spawn minions
+            if boss.spawn_minions():
+                for i in range(3):
+                    angle = i * 120
+                    rad = math.radians(angle)
+                    x = boss.x + math.cos(rad) * 100
+                    y = boss.y + math.sin(rad) * 100
+                    asteroids.append(Asteroid(x, y, 'medium'))
+        
+        # Update ally ships
+        for ally in allies[:]:
+            ally.update(asteroids, ship)
+            ally_bullet = ally.shoot()
+            if ally_bullet:
+                bullets.append(ally_bullet)
+            if ally.is_expired():
+                allies.remove(ally)
+        
+        # Update environmental event
+        if current_event:
+            current_event.update(ship, asteroids)
+            if not current_event.active:
+                current_event = None
+        
         # Check bullet-asteroid collisions
         for bullet in bullets[:]:
             hit = False
@@ -1726,6 +2428,31 @@ while running:
                     play_explosion_sound()  # Big explosion
                     play_achievement_sound()  # Bonus achievement sound for high value target!
                     ufo = None
+            
+            # Check bullet-Boss collision
+            if not hit and boss:
+                if boss.check_collision_bullet(bullet):
+                    if bullet in bullets:
+                        bullets.remove(bullet)
+                    
+                    # Boss takes damage
+                    damage = getattr(bullet, 'damage', 1)
+                    if boss.take_damage(damage):
+                        # Boss defeated!
+                        score += 5000 + (wave // 5) * 2000  # Huge points
+                        create_explosion(boss.x, boss.y, particles, 'bright')
+                        for i in range(10):  # Multiple explosions
+                            offset_x = random.randint(-30, 30)
+                            offset_y = random.randint(-30, 30)
+                            create_explosion(boss.x + offset_x, boss.y + offset_y, particles, 'accent')
+                        play_explosion_sound()
+                        play_achievement_sound()
+                        boss = None
+                        # Grant extra life for boss kill
+                        lives += 1
+                    else:
+                        # Boss hit but not dead
+                        create_explosion(bullet.x, bullet.y, particles)
         
         # Check ship-asteroid collisions
         if not ship.invulnerable and not ship.shield:
@@ -1744,9 +2471,19 @@ while running:
                     ship = Ship(WIDTH//2, HEIGHT//2)
                     ship.invulnerable = True
                     ship.invulnerable_timer = 120  # 2 seconds
+                    
+                    # Chance to spawn ally backup!
+                    if wave > 2 and wave - last_ally_wave >= 2:  # Cooldown
+                        if random.random() < ally_spawn_chance:
+                            ally_type = random.choice(['fighter', 'bomber', 'defender'])
+                            allies.append(AllyShip(random.randint(100, WIDTH-100), 50, ally_type))
+                            last_ally_wave = wave
+                            play_achievement_sound()  # Ally arrival sound
 
                     if lives <= 0:
                         game_over = True
+                        # Update hi-scores when game ends
+                        hiscores, new_hiscore_rank = update_hiscores(score)
 
                     break
         
@@ -1766,9 +2503,19 @@ while running:
                     ship = Ship(WIDTH//2, HEIGHT//2)
                     ship.invulnerable = True
                     ship.invulnerable_timer = 120
+                    
+                    # Chance to spawn ally backup!
+                    if wave > 2 and wave - last_ally_wave >= 2:
+                        if random.random() < ally_spawn_chance:
+                            ally_type = random.choice(['fighter', 'bomber', 'defender'])
+                            allies.append(AllyShip(random.randint(100, WIDTH-100), 50, ally_type))
+                            last_ally_wave = wave
+                            play_achievement_sound()
 
                     if lives <= 0:
                         game_over = True
+                        # Update hi-scores when game ends
+                        hiscores, new_hiscore_rank = update_hiscores(score)
 
                     break
         
@@ -1790,6 +2537,8 @@ while running:
 
                 if lives <= 0:
                     game_over = True
+                    # Update hi-scores when game ends
+                    hiscores, new_hiscore_rank = update_hiscores(score)
         
         # Check power-up collisions
         for powerup in powerups[:]:
@@ -1804,7 +2553,17 @@ while running:
                     powerup_sound.play()
                     ship.shield = True
                     ship.shield_timer = 300
-                else:  # bomb - screen clear!
+                elif powerup.power_type in ['piercing', 'explosive', 'spread']:
+                    # Ammo pickup
+                    powerup_sound.play()
+                    current_ammo_type = powerup.power_type
+                    if powerup.power_type == 'piercing':
+                        ammo_counts['piercing'] = min(ammo_counts['piercing'] + 30, 60)
+                    elif powerup.power_type == 'explosive':
+                        ammo_counts['explosive'] = min(ammo_counts['explosive'] + 20, 40)
+                    elif powerup.power_type == 'spread':
+                        ammo_counts['spread'] = min(ammo_counts['spread'] + 50, 100)
+                elif powerup.power_type == 'bomb':  # bomb - screen clear!
                     big_laser_sound.play()  # Epic bomb sound
                     # Destroy all asteroids and create massive particle effects
                     for asteroid in asteroids[:]:
@@ -1816,14 +2575,46 @@ while running:
                         create_explosion(ufo.x, ufo.y, particles)
                         score += 200
                         ufo = None
+                    # Damage boss heavily if present
+                    if boss:
+                        if boss.take_damage(50):  # Massive damage
+                            score += 5000 + (wave // 5) * 2000
+                            create_explosion(boss.x, boss.y, particles, 'bright')
+                            boss = None
+                            lives += 1
+                        else:
+                            create_explosion(boss.x, boss.y, particles)
 
                 break
         
-        # New wave when all asteroids cleared
-        if len(asteroids) == 0:
+        # New wave when all asteroids cleared (and no boss)
+        if len(asteroids) == 0 and not boss:
             wave += 1
             play_level_up_sound()  # Celebrate wave completion!
-            asteroids = spawn_asteroids(4, 'large', wave)
+            
+            # Progressive difficulty increase
+            difficulty_multiplier = 1.0 + (wave - 1) * 0.1  # 10% per wave
+            asteroid_speed_multiplier = 1.0 + (wave - 1) * 0.05  # 5% per wave
+            ufo_accuracy_multiplier = 1.0 + (wave - 1) * 0.08  # 8% per wave
+            
+            # Boss encounter every 5 waves
+            if wave % boss_wave_interval == 0:
+                boss = Boss(wave)
+                play_achievement_sound()  # Boss arrival sound!
+            else:
+                asteroids = spawn_asteroids(4, 'large', wave)
+                
+                # Chance for environmental event (not during boss waves)
+                if wave > 3 and wave - last_event_wave >= 3:  # Cooldown between events
+                    if random.random() < event_chance:
+                        event_types = ['asteroid_storm', 'gravity_well', 'emp_pulse', 'solar_flare', 'meteor_shower']
+                        current_event = EnvironmentalEvent(random.choice(event_types))
+                        last_event_wave = wave
+                
+                # Random ammo drop
+                if wave % 3 == 0:  # Every 3 waves
+                    ammo_type = random.choice(['piercing', 'explosive', 'spread'])
+                    powerups.append(PowerUp(WIDTH // 2, HEIGHT // 2, ammo_type))
     
     # Drawing
     screen.fill(current_scheme.bg)
@@ -1865,6 +2656,10 @@ while running:
         if ufo:
             ufo.draw(screen)
         
+        # Draw boss
+        if boss:
+            boss.draw(screen)
+        
         # Draw bullets
         for bullet in bullets:
             bullet.draw(screen)
@@ -1875,9 +2670,17 @@ while running:
         # Draw power-ups
         for powerup in powerups:
             powerup.draw(screen)
+        
+        # Draw ally ships
+        for ally in allies:
+            ally.draw(screen)
 
         # Draw ship
         ship.draw(screen)
+        
+        # Draw environmental event overlay
+        if current_event:
+            current_event.draw(screen)
         
         # CRT effects removed - was causing visual artifacts in center of screen
         # draw_scanlines(screen)
@@ -1922,16 +2725,35 @@ while running:
         scheme_width = small_font.render(current_scheme.name, True, current_scheme.dim).get_width()
         draw_text_with_shadow(screen, current_scheme.name, tiny_font,
                             WIDTH//2 - scheme_width//2 - 10, 90, current_scheme.dim)
+        
+        # Ammo/Weapon indicator (top-right corner) 
+        ammo_panel_width = 200
+        ammo_panel_height = 90
+        draw_terminal_panel(screen, WIDTH - ammo_panel_width - 10, 10,
+                          ammo_panel_width, ammo_panel_height,
+                          current_scheme.secondary, fill_alpha=80)
+        
+        draw_text_with_shadow(screen, 'WEAPON', tiny_font, WIDTH - 190, 20, current_scheme.dim)
+        if current_ammo_type == 'normal':
+            draw_text_with_shadow(screen, 'STANDARD', small_font, WIDTH - 190, 40, current_scheme.primary)
+            draw_text_with_shadow(screen, '∞', font, WIDTH - 190, 60, current_scheme.accent)
+        else:
+            ammo_names = {'piercing': 'PIERCING', 'explosive': 'EXPLOSIVE', 'spread': 'SPREAD'}
+            ammo_colors = {'piercing': (100, 150, 255), 'explosive': (255, 150, 50), 'spread': (100, 255, 100)}
+            draw_text_with_shadow(screen, ammo_names[current_ammo_type], small_font, 
+                                WIDTH - 190, 40, ammo_colors[current_ammo_type])
+            draw_text_with_shadow(screen, f'{ammo_counts[current_ammo_type]}', font,
+                                WIDTH - 190, 60, ammo_colors[current_ammo_type])
 
-        # Power-up indicators (top-right)
+        # Power-up indicators (below ammo panel)
         if ship.rapid_fire or ship.shield:
             powerup_panel_width = 200
             powerup_panel_height = 60 if (ship.rapid_fire and ship.shield) else 40
-            draw_terminal_panel(screen, WIDTH - powerup_panel_width - 10, 10,
+            draw_terminal_panel(screen, WIDTH - powerup_panel_width - 10, 110,
                               powerup_panel_width, powerup_panel_height,
                               current_scheme.bright, fill_alpha=100)
 
-            y_offset = 18
+            y_offset = 118
             if ship.rapid_fire:
                 draw_text_with_shadow(screen, '⚡ RAPID FIRE', small_font,
                                     WIDTH - powerup_panel_width + 5, y_offset, current_scheme.accent)
@@ -1941,12 +2763,33 @@ while running:
                 draw_text_with_shadow(screen, '🛡 SHIELD', small_font,
                                     WIDTH - powerup_panel_width + 5, y_offset, current_scheme.bright)
 
+        # Bottom status bar - show ally count and difficulty
+        status_panel_height = 60
+        draw_terminal_panel(screen, 10, HEIGHT - status_panel_height - 50,
+                          WIDTH - 20, status_panel_height, current_scheme.dim, fill_alpha=60)
+        
+        # Ally count
+        if len(allies) > 0:
+            ally_text = f'ALLIES: {len(allies)}'
+            draw_text_with_shadow(screen, ally_text, tiny_font, 25, HEIGHT - 85, (100, 255, 100))
+        
+        # Difficulty multiplier
+        diff_text = f'DIFFICULTY: x{difficulty_multiplier:.1f}'
+        diff_color = current_scheme.accent if difficulty_multiplier < 2.0 else (255, 100, 100)
+        draw_text_with_shadow(screen, diff_text, tiny_font, 150, HEIGHT - 85, diff_color)
+        
+        # Boss warning
+        if wave % boss_wave_interval == boss_wave_interval - 1:
+            warning_text = '⚠ BOSS INCOMING NEXT WAVE ⚠'
+            draw_text_with_shadow(screen, warning_text, small_font,
+                                WIDTH//2 - 150, HEIGHT - 80, (255, 50, 50))
+        
         # Bottom controls bar
         controls_panel_height = 40
         draw_terminal_panel(screen, 10, HEIGHT - controls_panel_height - 10,
                           WIDTH - 20, controls_panel_height, current_scheme.dim, fill_alpha=60)
 
-        controls_text = 'ARROWS: Move  |  L-CTRL: Shoot  |  L-SHIFT: Warp  |  C: Color  |  F11: Fullscreen'
+        controls_text = '↑: Thrust  ↓: Reverse  ←→: Rotate  |  L-CTRL: Shoot  |  L-SHIFT: Warp  |  C: Color  |  F11: Fullscreen'
         controls_width = tiny_font.render(controls_text, True, current_scheme.dim).get_width()
         draw_text_with_shadow(screen, controls_text, tiny_font,
                             WIDTH//2 - controls_width//2, HEIGHT - 35, current_scheme.dim, shadow_offset=1)
@@ -1957,9 +2800,9 @@ while running:
         # draw_scanlines(screen)
         # draw_vignette(screen)
 
-        # Center panel
-        panel_width = 600
-        panel_height = 400
+        # Center panel - larger to fit hi-scores
+        panel_width = 650
+        panel_height = 600
         panel_x = WIDTH//2 - panel_width//2
         panel_y = HEIGHT//2 - panel_height//2
 
@@ -1972,23 +2815,72 @@ while running:
         game_over_text = large_font.render('GAME OVER', True, title_color)
         go_width = game_over_text.get_width()
         draw_text_with_shadow(screen, 'GAME OVER', large_font,
-                            WIDTH//2 - go_width//2, panel_y + 50, title_color, shadow_offset=3)
+                            WIDTH//2 - go_width//2, panel_y + 40, title_color, shadow_offset=3)
 
         # Stats section
         draw_text_with_shadow(screen, 'FINAL STATISTICS', small_font,
-                            WIDTH//2 - 110, panel_y + 160, current_scheme.dim)
+                            WIDTH//2 - 110, panel_y + 140, current_scheme.dim)
 
         # Score
         draw_text_with_shadow(screen, 'SCORE', tiny_font,
-                            WIDTH//2 - 180, panel_y + 200, current_scheme.dim)
+                            WIDTH//2 - 200, panel_y + 180, current_scheme.dim)
+        score_color = current_scheme.accent if new_hiscore_rank > 0 else current_scheme.primary
         draw_text_with_shadow(screen, f'{score:,}', font,
-                            WIDTH//2 - 180, panel_y + 220, current_scheme.primary)
+                            WIDTH//2 - 200, panel_y + 200, score_color)
+        
+        # Show "NEW HI-SCORE!" if applicable
+        if new_hiscore_rank > 0:
+            rank_text = f'#{new_hiscore_rank} HI-SCORE!'
+            rank_surf = tiny_font.render(rank_text, True, current_scheme.accent)
+            rank_width = rank_surf.get_width()
+            draw_text_with_shadow(screen, rank_text, tiny_font,
+                                WIDTH//2 - 200 + 80, panel_y + 240, current_scheme.accent)
 
         # Wave
         draw_text_with_shadow(screen, 'WAVE', tiny_font,
-                            WIDTH//2 + 50, panel_y + 200, current_scheme.dim)
+                            WIDTH//2 + 80, panel_y + 180, current_scheme.dim)
         draw_text_with_shadow(screen, f'{wave}', font,
-                            WIDTH//2 + 50, panel_y + 220, current_scheme.primary)
+                            WIDTH//2 + 80, panel_y + 200, current_scheme.primary)
+
+        # Hi-Scores section
+        hiscore_y_start = panel_y + 300
+        draw_text_with_shadow(screen, '═══ HI-SCORES ═══', small_font,
+                            WIDTH//2 - 100, hiscore_y_start, current_scheme.bright)
+        
+        # Display top 5 scores
+        for i, hiscore in enumerate(hiscores):
+            rank_y = hiscore_y_start + 40 + (i * 35)
+            
+            # Highlight if this is the new score
+            if hiscore == score and i + 1 == new_hiscore_rank:
+                # Flashing highlight for new entry
+                highlight_color = current_scheme.accent if flash else current_scheme.bright
+                # Draw highlight background
+                highlight_rect = pygame.Rect(panel_x + 50, rank_y - 5, panel_width - 100, 30)
+                pygame.draw.rect(screen, (*highlight_color, 40), highlight_rect)
+                pygame.draw.rect(screen, highlight_color, highlight_rect, 1)
+                text_color = highlight_color
+            else:
+                text_color = current_scheme.primary
+            
+            # Rank number
+            rank_text = f'{i + 1}.'
+            draw_text_with_shadow(screen, rank_text, small_font,
+                                WIDTH//2 - 220, rank_y, current_scheme.dim)
+            
+            # Score value
+            score_text = f'{hiscore:,}'
+            draw_text_with_shadow(screen, score_text, small_font,
+                                WIDTH//2 - 180, rank_y, text_color)
+        
+        # If fewer than 5 scores, show empty slots
+        for i in range(len(hiscores), 5):
+            rank_y = hiscore_y_start + 40 + (i * 35)
+            rank_text = f'{i + 1}.'
+            draw_text_with_shadow(screen, rank_text, small_font,
+                                WIDTH//2 - 220, rank_y, current_scheme.dim)
+            draw_text_with_shadow(screen, '---', small_font,
+                                WIDTH//2 - 180, rank_y, current_scheme.dim)
 
         # Restart instruction with pulsing effect
         pulse_alpha = int(127 + 127 * math.sin(pygame.time.get_ticks() * 0.003))
@@ -1996,7 +2888,7 @@ while running:
         restart_surf = pygame.Surface((400, 40), pygame.SRCALPHA)
         restart_text = small_font.render('► PRESS SPACE TO RESTART ◄', True, restart_color)
         restart_width = restart_text.get_width()
-        screen.blit(restart_text, (WIDTH//2 - restart_width//2, panel_y + 320))
+        screen.blit(restart_text, (WIDTH//2 - restart_width//2, panel_y + 540))
     
     pygame.display.flip()
 

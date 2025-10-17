@@ -37,12 +37,14 @@
 
 ### 🎮 Gameplay Mechanics
 
-- **Classic Asteroids Physics**: Authentic momentum-based ship movement with inertia
+- **Enhanced Zero-Gravity Physics**: True friction-free space movement with rotational inertia for realistic challenge
+- **Backwards Thrust**: Strategic reverse thrusters (50% power) for precise braking and maneuvering
 - **Progressive Difficulty**: Dynamic asteroid spawning that scales with player skill
 - **Power-Up System**: Shields, rapid fire, and screen-clearing bombs
 - **UFO Encounters**: AI-controlled enemies with targeting behavior
 - **Wave-Based Progression**: Escalating challenge with bonus lives every 10,000 points
 - **Hyperspace Jump**: Emergency teleportation with strategic risk/reward mechanics
+- **Hi-Score System**: Persistent top 5 leaderboard with automatic save/load and visual highlights
 
 ### 🎨 Visual Excellence
 
@@ -124,24 +126,24 @@ pygame>=2.6.1  # Game framework and rendering engine
 
 | Action | Key |
 |--------|-----|
-| **Rotate Left** | `A` or `←` |
-| **Rotate Right** | `D` or `→` |
-| **Thrust Forward** | `W` or `↑` |
-| **Shoot** | `SPACE` or `Left CTRL` |
-| **Hyperspace Jump** | `S` or `↓` |
-| **Pause Game** | `P` |
+| **Rotate Left** | `←` Left Arrow |
+| **Rotate Right** | `→` Right Arrow |
+| **Thrust Forward** | `↑` Up Arrow |
+| **Reverse Thrust** | `↓` Down Arrow (50% power) |
+| **Shoot** | `Left CTRL` |
+| **Hyperspace Jump** | `Left SHIFT` |
 | **Cycle Color Schemes** | `C` |
-| **Toggle CRT Effects** | `V` |
-| **Mute/Unmute Audio** | `M` |
-| **Quit Game** | `ESC` |
+| **Toggle Fullscreen** | `F11` |
 
 ### Gameplay Tips
 
-- **Momentum Management**: Your ship maintains velocity—plan moves ahead
+- **Master Zero-Gravity**: Your ship never slows down—every thrust input is permanent until countered
+- **Reverse Thrust Essential**: Use DOWN arrow for braking and fine control (50% of forward thrust power)
+- **Rotation Inertia**: Ship continues spinning after releasing rotation keys—tap don't hold for precision
+- **Plan Ahead**: With no friction, overcorrection is costly—think before thrusting
+- **Drift Navigation**: Build velocity once and coast, saving thrust for course corrections
 - **Hyperspace Strategy**: Use when surrounded, but beware of random teleportation
-- **Shield Priority**: Grab shield power-ups first for survivability
-- **UFO Timing**: Small UFOs are aggressive—eliminate quickly or evade
-- **Bomb Smart**: Save screen-clearing bombs for overwhelming situations
+- **Shield Priority**: Grab shield power-ups first for survivability when learning the physics
 
 ---
 
@@ -413,7 +415,10 @@ pygame-asteriods-deluxe/
 │   ├── VISUAL_STYLE_GUIDE.md         # 16-bit rendering techniques
 │   ├── PERFORMANCE_OPTIMIZATIONS.md  # Optimization case study
 │   ├── PYGAME_SOUND_REFERENCE.md     # Audio implementation notes
-│   └── SOUND_EFFECTS_GUIDE.md        # Sound effect documentation
+│   ├── SOUND_EFFECTS_GUIDE.md        # Sound effect documentation
+│   ├── HISCORE_SYSTEM.md             # Hi-score tracking and leaderboard
+│   ├── ENHANCED_GAMEPLAY_GUIDE.md    # Advanced gameplay systems
+│   └── ENHANCED_PHYSICS.md           # Zero-gravity physics implementation
 │
 └── sounds/                       # Audio assets (freesound.org)
     ├── explode1.wav
